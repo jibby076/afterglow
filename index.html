@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Afterglow</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+            font-family: 'Courier New', monospace;
+        }
+        #gameContainer {
+            position: relative;
+            box-shadow: 0 0 50px rgba(0, 255, 255, 0.3);
+        }
+        canvas {
+            background: #000;
+            display: block;
+        }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #00ffff;
+            text-align: center;
+            text-shadow: 0 0 10px #00ffff;
+            pointer-events: none;
+            user-select: none;
+        }
+        #time {
+            font-size: 24px;
+            font-weight: bold;
+        }
+        #gameOver {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #ff00ff;
+            text-align: center;
+            display: none;
+            text-shadow: 0 0 20px #ff00ff;
+            pointer-events: none;
+            user-select: none;
+        }
+        #gameOver h1 {
+            font-size: 48px;
+            margin-bottom: 10px;
+        }
+        #finalTime {
+            font-size: 24px;
+        }
+        #startScreen {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #00ffff;
+            text-align: center;
+            text-shadow: 0 0 15px #00ffff;
+            pointer-events: none;
+            user-select: none;
+        }
+        #startScreen h1 {
+            font-size: 64px;
+            margin-bottom: 20px;
+            letter-spacing: 10px;
+        }
+        #startScreen p {
+            font-size: 18px;
+            animation: pulse 2s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="game" width="800" height="600"></canvas>
+        <div id="ui">
+            <div id="time">0.00s</div>
+        </div>
+        <div id="gameOver">
+            <h1>LOST TO THE VOID</h1>
+            <div id="finalTime">0.00s</div>
+        </div>
+        <div id="startScreen">
+            <h1>AFTERGLOW</h1>
+            <p>PRESS ANY KEY TO BEGIN</p>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('game');
+        const ctx = canvas.getContext('2d');
+        const timeEl = document.getElementById('time');
+        const gameOverEl = document.getElementById('gameOver');
+        const finalTimeEl = document.getElementById('finalTime');
+        const startScreen = document.getElementById('startScreen');
+
+        const PLAYER_RADIUS = 4;
+        const LIGHT_RADIUS = 80;
+        const TRAIL_LENGTH = 15;
+        const DECAY_RATE = 0.0008;
+        const HAZARD_COUNT = 12;
+
+        let gameRunning = false;
+        let gameStarted = false;
+        let startTime = 0;
+        let currentTime = 0;
+
+        const player = {
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            vx: 0,
+            vy: 0,
+            speed: 3
+        };
+
+        const keys = {};
+        const trail = [];
+        const revealed = [];
+        const hazards = [];
+
+        function initHazards() {
+            hazards.length = 0;
+            for (let i = 0; i < HAZARD_COUNT; i++) {
+                hazards.push({
+                    x: Math.random() * canvas.width,
+                    y: Math.random() * canvas.height,
+                    radius: 6,
+                    pulse: Math.random() * Math.PI * 2,
+                    alpha: 0
+                });
+            }
+        }
+
+        function startGame() {
+            if (gameStarted) return;
+            gameStarted = true;
+            startScreen.style.display = 'none';
+            gameRunning = true;
+            startTime = Date.now();
+            player.x = canvas.width / 2;
+            player.y = canvas.height / 2;
+            trail.length = 0;
+            revealed.length = 0;
+            initHazards();
+            gameLoop();
+        }
+
+        document.addEventListener('keydown', (e) => {
+            keys[e.key.toLowerCase()] = true;
+            startGame();
+        });
+        document.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+        });
+
+        function update() {
+            if (!gameRunning) return;
+
+            // Movement
+            player.vx = 0;
+            player.vy = 0;
+            if (keys['arrowleft'] || keys['a']) player.vx = -player.speed;
+            if (keys['arrowright'] || keys['d']) player.vx = player.speed;
+            if (keys['arrowup'] || keys['w']) player.vy = -player.speed;
+            if (keys['arrowdown'] || keys['s']) player.vy = player.speed;
+
+            player.x += player.vx;
+            player.y += player.vy;
+
+            // Keep in bounds
+            if (player.x < 0) player.x = 0;
+            if (player.x > canvas.width) player.x = canvas.width;
+            if (player.y < 0) player.y = 0;
+            if (player.y > canvas.height) player.y = canvas.height;
+
+            // Trail
+            trail.push({x: player.x, y: player.y, life: 1.0});
+            if (trail.length > TRAIL_LENGTH) trail.shift();
+
+            // Reveal area around player
+            revealed.push({
+                x: player.x,
+                y: player.y,
+                radius: LIGHT_RADIUS,
+                life: 1.0,
+                time: Date.now()
+            });
+
+            // Decay revealed areas
+            for (let i = revealed.length - 1; i >= 0; i--) {
+                revealed[i].life -= DECAY_RATE * (1 + (currentTime / 10000));
+                if (revealed[i].life <= 0) {
+                    revealed.splice(i, 1);
+                }
+            }
+
+            // Update trail
+            for (let i = trail.length - 1; i >= 0; i--) {
+                trail[i].life -= 0.08;
+                if (trail[i].life <= 0) trail.splice(i, 1);
+            }
+
+            // Update hazards
+            for (let hazard of hazards) {
+                hazard.pulse += 0.1;
+                // Check if revealed
+                for (let rev of revealed) {
+                    const dx = hazard.x - rev.x;
+                    const dy = hazard.y - rev.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist < rev.radius) {
+                        hazard.alpha = Math.min(1, hazard.alpha + 0.05);
+                        break;
+                    }
+                }
+                hazard.alpha = Math.max(0, hazard.alpha - 0.01);
+                
+                // Collision with player
+                if (hazard.alpha > 0.3) {
+                    const dx = hazard.x - player.x;
+                    const dy = hazard.y - player.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist < PLAYER_RADIUS + hazard.radius) {
+                        gameOver();
+                    }
+                }
+            }
+
+            currentTime = (Date.now() - startTime) / 1000;
+            timeEl.textContent = currentTime.toFixed(2) + 's';
+        }
+
+        function gameOver() {
+            gameRunning = false;
+            finalTimeEl.textContent = currentTime.toFixed(2) + 's';
+            gameOverEl.style.display = 'block';
+        }
+
+        function draw() {
+            // Clear with fade effect
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw revealed light areas
+            for (let rev of revealed) {
+                const gradient = ctx.createRadialGradient(rev.x, rev.y, 0, rev.x, rev.y, rev.radius);
+                gradient.addColorStop(0, `rgba(0, 255, 255, ${rev.life * 0.15})`);
+                gradient.addColorStop(0.5, `rgba(0, 255, 255, ${rev.life * 0.08})`);
+                gradient.addColorStop(1, 'rgba(0, 255, 255, 0)');
+                ctx.fillStyle = gradient;
+                ctx.beginPath();
+                ctx.arc(rev.x, rev.y, rev.radius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // Draw trail
+            for (let i = 0; i < trail.length; i++) {
+                const t = trail[i];
+                const alpha = t.life * 0.6;
+                ctx.fillStyle = `rgba(0, 255, 255, ${alpha})`;
+                ctx.beginPath();
+                ctx.arc(t.x, t.y, PLAYER_RADIUS * t.life * 0.8, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // Draw hazards
+            for (let hazard of hazards) {
+                if (hazard.alpha > 0) {
+                    const pulse = Math.sin(hazard.pulse) * 2;
+                    const gradient = ctx.createRadialGradient(hazard.x, hazard.y, 0, hazard.x, hazard.y, hazard.radius + pulse);
+                    gradient.addColorStop(0, `rgba(255, 0, 255, ${hazard.alpha})`);
+                    gradient.addColorStop(0.6, `rgba(255, 0, 255, ${hazard.alpha * 0.5})`);
+                    gradient.addColorStop(1, `rgba(255, 0, 255, 0)`);
+                    ctx.fillStyle = gradient;
+                    ctx.beginPath();
+                    ctx.arc(hazard.x, hazard.y, hazard.radius + pulse, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+
+            // Draw player with glow
+            const playerGlow = ctx.createRadialGradient(player.x, player.y, 0, player.x, player.y, PLAYER_RADIUS * 3);
+            playerGlow.addColorStop(0, 'rgba(255, 255, 255, 1)');
+            playerGlow.addColorStop(0.3, 'rgba(0, 255, 255, 0.8)');
+            playerGlow.addColorStop(1, 'rgba(0, 255, 255, 0)');
+            ctx.fillStyle = playerGlow;
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, PLAYER_RADIUS * 3, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, PLAYER_RADIUS, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        function gameLoop() {
+            if (!gameRunning) return;
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+    </script>
+</body>
+</html>
